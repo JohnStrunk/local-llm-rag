@@ -1,0 +1,90 @@
+version: '3'
+
+name: local-llm
+
+x-env: &env
+  # Environment variables to be used by the services
+  CHROMA_PORT: 8000
+  CHROMA_SERVER: chroma
+  EMBEDDING_MODEL_NAME: BAAI/bge-base-en-v1.5
+  LLM_MODEL_NAME: mistral:7b-instruct-q5_K_M
+  OLLAMA_SERVER_URL: http://ollama:11434
+
+services:
+  # Container running the Chroma DB service, our vector database for storing
+  # document embeddings
+  chroma:  # https://github.com/chroma-core/chroma
+    entrypoint: uvicorn chromadb.app:app --reload --workers 1 --log-config chromadb/log_config.yml --timeout-keep-alive 30 --host 0.0.0.0 --port 8000
+    image: ghcr.io/chroma-core/chroma:latest
+    environment:
+      <<: *env
+      # Available settings are defined in the Settings() class at
+      # https://github.com/chroma-core/chroma/blob/main/chromadb/config.py
+      ANONYMIZED_TELEMETRY: FALSE  # Disable telemetry
+      IS_PERSISTENT: TRUE
+      PERSIST_DIRECTORY: /data
+    healthcheck:
+      test: python -c "import chromadb; client = chromadb.HttpClient(host='localhost', port=8000); client.heartbeat();"
+      interval: 1m30s
+      retries: 3
+      start_interval: 2s
+      start_period: 60s
+      timeout: 10s
+    pull_policy: always
+    volumes:
+      - type: volume
+        source: chroma
+        target: /data
+    ports:
+      - "127.0.0.1:8000:8000/tcp"
+
+  # Model puller ensures that the LLM model is available to be served by the
+  # Ollama service
+  model-puller:
+    cap_drop:
+      - ALL
+    command:
+      - |
+        PS4='+ $(date "+%Y/%m/%d - %H:%M:%S") '
+        set -ex -o pipefail
+        ollama pull "$$LLM_MODEL_NAME"
+        echo "Model pulled successfully"
+    depends_on:
+      ollama:  # Wait for the Ollama server to be ready before pulling
+        condition: service_healthy
+    entrypoint: ["bash", "-c"]
+    environment:
+      <<: *env
+    image: ollama/ollama:latest
+    network_mode: service:ollama
+    pull_policy: always
+    restart: on-failure:3
+    volumes:
+      - type: tmpfs
+        target: /tmp
+
+  # Container running the Ollama service to serve the main LLM model
+  ollama:  # https://github.com/ollama/ollama
+    cap_drop:
+      - ALL
+    environment:
+      <<: *env
+    healthcheck:
+      test: "ollama list || exit 1"
+      interval: 1m30s
+      retries: 3
+      start_interval: 2s
+      start_period: 60s
+      timeout: 10s
+    image: ollama/ollama:latest
+    ports:
+      - "127.0.0.1:11434:11434/tcp"
+    pull_policy: always
+    volumes:
+      - type: volume
+        source: ollama
+        target: /root/.ollama
+
+volumes:
+  chroma: # Volume to store the Chroma DB data
+  ollama: # Volume to store the downloaded Ollama LLM models
