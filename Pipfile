@@ -15,6 +15,7 @@ markdown = "*"
 pymupdf = "*"
 pypandoc = "*"
 unstructured = {extras = ["all-docs"], version = "*"}
+langchain-together = "*"
 
 [dev-packages]
 ipykernel = "*"
